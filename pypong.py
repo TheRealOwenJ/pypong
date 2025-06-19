@@ -9,7 +9,6 @@ import termios
 import tty
 import json
 
-# ANSI kleuren
 RESET = "\033[0m"
 RED = "\033[31m"
 GREEN = "\033[32m"
@@ -332,14 +331,14 @@ def get_own_ip():
         s.close()
         return ip
     except:
-        return "Onbekend"
+        return "Unknown"
 
 def online_host_menu(settings, user_data):
     clear()
     host_ip = get_own_ip()
     print(CYAN + "Hosting online game." + RESET)
-    print(f"Jouw IP-adres is: {YELLOW}{host_ip}{RESET}")
-    print("Wacht op een speler om te verbinden...\n")
+    print(f"Your IP address: {YELLOW}{host_ip}{RESET}")
+    print("Waiting for a player to connect...\n")
 
     host = "0.0.0.0"
     port = 12345
@@ -350,11 +349,11 @@ def online_host_menu(settings, user_data):
     try:
         conn, addr = s.accept()
     except socket.timeout:
-        print(RED + "Timeout bij wachten op client." + RESET)
-        input("Druk op Enter om verder te gaan...")
+        print(RED + "Timeout waiting for client." + RESET)
+        input("Press Enter to continue...")
         return
 
-    print(GREEN + f"Speler verbonden vanaf {addr}" + RESET)
+    print(GREEN + f"Player connected from {addr}" + RESET)
     game = PongGame(win_score=settings.win_score, paddle_size=settings.paddle_size, ball_speed=settings.ball_speed,
                     mode="online_host", online_server=conn, user_data=user_data)
     game.run()
