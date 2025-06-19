@@ -76,7 +76,6 @@ class UserData:
         return False
 
     def record_result(self, mode, won):
-        # mode = "single", "local", "online"
         key_map = {
             "single": "vs_ai",
             "local": "vs_local",
@@ -109,81 +108,54 @@ class PongGame:
     def __init__(self, win_score, paddle_size, ball_speed, mode="single", online_client=None, online_server=None, user_data=None):
         self.win_score = win_score
         self.paddle_size = paddle_size
-        self.ball_speed = ball_speed  # lower = faster
+        self.ball_speed = ball_speed
         self.mode = mode
         self.online_client = online_client
         self.online_server = online_server
         self.user_data = user_data
 
-        # Paddles y-pos (top)
         self.p1_y = (self.HEIGHT - self.paddle_size) // 2
         self.p2_y = (self.HEIGHT - self.paddle_size) // 2
-
-        # Ball pos (x,y)
         self.ball_x = self.WIDTH // 2
         self.ball_y = self.HEIGHT // 2
-
-        # Ball velocity
         self.ball_vx = 1
         self.ball_vy = 1
-
-        # Scores
         self.score1 = 0
         self.score2 = 0
-
-        # Game over flag
         self.game_over = False
 
-        # Controls
         self.controls_p1_up = "w"
         self.controls_p1_down = "s"
         self.controls_p2_up = "o"
         self.controls_p2_down = "l"
-
-        # AI difficulty for singleplayer (1 easy - 3 hard)
         self.ai_difficulty = 2
-
-        # For timing ball movement
         self.last_ball_move = time.time()
 
     def draw(self):
         clear()
-        # Bovenbalk met scores
         print(CYAN + f" Player 1: {self.score1} " + RESET + " " * 20 + CYAN + f" Player 2: {self.score2} " + RESET)
-
-        # Bovenrand
         print("-" * self.WIDTH)
-
         for y in range(self.HEIGHT):
             line = ""
             for x in range(self.WIDTH):
-                # Links paddle
                 if x == 1 and self.p1_y <= y < self.p1_y + self.paddle_size:
                     line += GREEN + "|" + RESET
-                # Rechts paddle
                 elif x == self.WIDTH - 2 and self.p2_y <= y < self.p2_y + self.paddle_size:
                     line += YELLOW + "|" + RESET
-                # Bal
                 elif x == self.ball_x and y == self.ball_y:
                     line += RED + "O" + RESET
-                # Muren
                 elif y == 0 or y == self.HEIGHT - 1:
                     line += "-"
                 else:
                     line += " "
             print(line)
-
-        # Onderbalk
         print("-" * self.WIDTH)
-
-        # Modus en instructies
         mode_str = {
             "single": "Singleplayer (W/S)",
             "local": "Local Multiplayer (W/S + O/L)",
             "online_host": "Online Multiplayer (Host)",
             "online_client": "Online Multiplayer (Client)",
         }.get(self.mode, "Unknown mode")
-
         print(CYAN + f"Mode: {mode_str}" + RESET)
         print("Press 'q' to quit game.")
 
@@ -193,29 +165,23 @@ class PongGame:
             return
         self.last_ball_move = now
 
-        # Verplaats bal
         self.ball_x += self.ball_vx
         self.ball_y += self.ball_vy
 
-        # Botsingen boven en onder
         if self.ball_y <= 1 or self.ball_y >= self.HEIGHT - 2:
             self.ball_vy *= -1
 
-        # Botsing paddle links
         if self.ball_x == 2:
             if self.p1_y <= self.ball_y < self.p1_y + self.paddle_size:
                 self.ball_vx *= -1
             else:
-                # Punt voor speler 2
                 self.score2 += 1
                 self.reset_ball()
 
-        # Botsing paddle rechts
         if self.ball_x == self.WIDTH - 3:
             if self.p2_y <= self.ball_y < self.p2_y + self.paddle_size:
                 self.ball_vx *= -1
             else:
-                # Punt voor speler 1
                 self.score1 += 1
                 self.reset_ball()
 
@@ -226,7 +192,6 @@ class PongGame:
         self.ball_vy = random.choice([-1, 1])
 
     def ai_move(self):
-        # AI beweegt paddle 2 (rechts)
         if self.ball_y < self.p2_y:
             self.p2_y = max(1, self.p2_y - 1)
         elif self.ball_y > self.p2_y + self.paddle_size - 1:
@@ -237,29 +202,20 @@ class PongGame:
         if not ch:
             return None
         ch = ch.lower()
-
-        # Quit game
         if ch == "q":
             self.game_over = True
-
-        # P1 controls
         if ch == self.controls_p1_up and self.p1_y > 1:
             self.p1_y -= 1
         elif ch == self.controls_p1_down and self.p1_y < self.HEIGHT - self.paddle_size - 1:
             self.p1_y += 1
-
-        # P2 controls (local multiplayer only)
         if self.mode == "local":
             if ch == self.controls_p2_up and self.p2_y > 1:
                 self.p2_y -= 1
             elif ch == self.controls_p2_down and self.p2_y < self.HEIGHT - self.paddle_size - 1:
                 self.p2_y += 1
-
         return ch
 
     def update_online(self):
-        # Voor online multiplayer, stuur/ontvang paddles en ball info
-
         if self.mode == "online_host" and self.online_server:
             try:
                 data = f"{self.p1_y},{self.p2_y},{self.ball_x},{self.ball_y},{self.ball_vx},{self.ball_vy},{self.score1},{self.score2}\n"
@@ -273,7 +229,6 @@ class PongGame:
                     pass
             except:
                 self.game_over = True
-
         elif self.mode == "online_client" and self.online_client:
             try:
                 data = f"{self.p2_y}\n"
@@ -300,22 +255,18 @@ class PongGame:
         winner = None
         while not self.game_over:
             self.draw()
-
             if self.mode == "single":
                 self.ai_move()
                 self.move_ball()
                 self.process_input()
-
             elif self.mode == "local":
                 self.process_input()
                 self.move_ball()
-
             elif self.mode in ("online_host", "online_client"):
                 self.process_input()
                 self.move_ball()
                 self.update_online()
 
-            # Check win condition
             if self.score1 >= self.win_score:
                 self.game_over = True
                 winner = "Player 1"
@@ -328,10 +279,8 @@ class PongGame:
         clear()
         if winner:
             print(GREEN + f"Game over! Winner: {winner}" + RESET)
-            # Stats opslaan
             if self.user_data:
                 if (winner == "Player 1" and self.mode == "single") or (winner == "Player 1" and self.mode == "local") or (winner == "Player 1" and self.mode in ("online_host", "online_client")):
-                    # Speler 1 wint
                     self.user_data.record_result(self.mode, True)
                 else:
                     self.user_data.record_result(self.mode, False)
@@ -340,8 +289,6 @@ class PongGame:
         print("Press Enter to return to menu...")
         input()
 
-
-# Settings opslaan in een simpele dict
 class Settings:
     def __init__(self):
         self.win_score = 5
@@ -377,9 +324,23 @@ class Settings:
             elif choice == "4":
                 break
 
+def get_own_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        return "Onbekend"
+
 def online_host_menu(settings, user_data):
     clear()
-    print(CYAN + "Hosting online game. Waiting for client to connect..." + RESET)
+    host_ip = get_own_ip()
+    print(CYAN + "Hosting online game." + RESET)
+    print(f"Jouw IP-adres is: {YELLOW}{host_ip}{RESET}")
+    print("Wacht op een speler om te verbinden...\n")
+
     host = "0.0.0.0"
     port = 12345
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -389,11 +350,11 @@ def online_host_menu(settings, user_data):
     try:
         conn, addr = s.accept()
     except socket.timeout:
-        print(RED + "Timeout waiting for client." + RESET)
-        input("Press Enter to continue...")
+        print(RED + "Timeout bij wachten op client." + RESET)
+        input("Druk op Enter om verder te gaan...")
         return
 
-    print(GREEN + f"Client connected from {addr}" + RESET)
+    print(GREEN + f"Speler verbonden vanaf {addr}" + RESET)
     game = PongGame(win_score=settings.win_score, paddle_size=settings.paddle_size, ball_speed=settings.ball_speed,
                     mode="online_host", online_server=conn, user_data=user_data)
     game.run()
