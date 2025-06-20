@@ -1,12 +1,55 @@
-import socket, threading, time, sys, os, random, select, termios, tty, json
+import socket, threading, time, sys, os, random, json
 
-RESET = "\033[0m"
-RED = "\033[31m"
-GREEN = "\033[32m"
-YELLOW = "\033[33m"
-CYAN = "\033[36m"
-MAGENTA = "\033[35m"
-WHITE = "\033[37m"
+# Cross-platform getch()
+if os.name == 'nt':
+    import msvcrt
+    def getch(timeout=0.05):
+        start = time.time()
+        while True:
+            if msvcrt.kbhit():
+                ch = msvcrt.getch()
+                if ch == b'\xe0':
+                    ch += msvcrt.getch()
+                return ch.decode(errors="ignore")
+            if time.time() - start > timeout:
+                return None
+else:
+    import tty, termios, select
+    def getch(timeout=0.05):
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            r, _, _ = select.select([fd], [], [], timeout)
+            if r:
+                ch = sys.stdin.read(1)
+                if ch == '\x1b':
+                    ch += sys.stdin.read(2)
+            else:
+                ch = None
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        return ch
+
+# Kleuren met fallback
+try:
+    from colorama import init, Fore, Style
+    init(autoreset=True)
+    RESET = Style.RESET_ALL
+    RED = Fore.RED
+    GREEN = Fore.GREEN
+    YELLOW = Fore.YELLOW
+    CYAN = Fore.CYAN
+    MAGENTA = Fore.MAGENTA
+    WHITE = Fore.WHITE
+except ImportError:
+    RESET = "\033[0m"
+    RED = "\033[31m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    CYAN = "\033[36m"
+    MAGENTA = "\033[35m"
+    WHITE = "\033[37m"
 
 DATA_FILE = "pong_userdata.json"
 default_data = {
@@ -18,23 +61,8 @@ default_data = {
     }
 }
 
-def clear(): os.system("clear" if os.name == "posix" else "cls")
-
-def getch(timeout=0.05):
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        r, _, _ = select.select([fd], [], [], timeout)
-        if r:
-            ch = sys.stdin.read(1)
-            if ch == '\x1b':
-                ch += sys.stdin.read(2)  # voor pijltjestoetsen
-        else:
-            ch = None
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-    return ch
+def clear():
+    os.system("cls" if os.name == "nt" else "clear")
 
 class UserData:
     def __init__(self):
@@ -45,14 +73,23 @@ class UserData:
             try:
                 with open(DATA_FILE) as f:
                     return json.load(f)
-            except: return default_data.copy()
+            except:
+                return default_data.copy()
         return default_data.copy()
 
-    def save(self): open(DATA_FILE, "w").write(json.dumps(self.data, indent=2))
-    def get_username(self): return self.data.get("username", "Player")
+    def save(self):
+        with open(DATA_FILE, "w") as f:
+            f.write(json.dumps(self.data, indent=2))
+
+    def get_username(self):
+        return self.data.get("username", "Player")
+
     def set_username(self, name):
         name = name.strip()
-        if name: self.data["username"] = name; self.save(); return True
+        if name:
+            self.data["username"] = name
+            self.save()
+            return True
         return False
 
     def record_result(self, mode, won):
@@ -71,13 +108,15 @@ class UserData:
 class PongGame:
     WIDTH, HEIGHT = 60, 20
     def __init__(self, win_score, paddle_size, ball_speed, mode="single", user_data=None, online_server=None, online_client=None):
-        self.win_score, self.paddle_size, self.ball_speed, self.mode = win_score, paddle_size, ball_speed, mode
+        self.win_score = win_score
+        self.paddle_size = paddle_size
+        self.ball_speed = ball_speed
+        self.mode = mode
         self.user_data = user_data
         self.username = user_data.get_username() if user_data else "Player"
         self.opponent_username = "Opponent"
         self.server = online_server
         self.client = online_client
-
         self.p1_y = self.p2_y = (self.HEIGHT - paddle_size) // 2
         self.ball_x = self.WIDTH // 2
         self.ball_y = self.HEIGHT // 2
@@ -86,7 +125,6 @@ class PongGame:
         self.score1 = self.score2 = 0
         self.last_move = time.time()
         self.game_over = False
-
         self.controls_p1_up = "w"
         self.controls_p1_down = "s"
         self.controls_p2_up = "\x1b[A"
@@ -99,10 +137,14 @@ class PongGame:
         for y in range(self.HEIGHT):
             line = ""
             for x in range(self.WIDTH):
-                if x == 1 and self.p1_y <= y < self.p1_y + self.paddle_size: line += GREEN + "|" + RESET
-                elif x == self.WIDTH - 2 and self.p2_y <= y < self.p2_y + self.paddle_size: line += YELLOW + "|" + RESET
-                elif x == self.ball_x and y == self.ball_y: line += RED + "O" + RESET
-                else: line += " "
+                if x == 1 and self.p1_y <= y < self.p1_y + self.paddle_size:
+                    line += GREEN + "|" + RESET
+                elif x == self.WIDTH - 2 and self.p2_y <= y < self.p2_y + self.paddle_size:
+                    line += YELLOW + "|" + RESET
+                elif x == self.ball_x and y == self.ball_y:
+                    line += RED + "O" + RESET
+                else:
+                    line += " "
             print(line)
         print("-" * self.WIDTH)
         print("Press 'q' to quit")
@@ -118,26 +160,40 @@ class PongGame:
         self.last_move = time.time()
         self.ball_x += self.ball_vx
         self.ball_y += self.ball_vy
-        if self.ball_y <= 0 or self.ball_y >= self.HEIGHT - 1: self.ball_vy *= -1
+        if self.ball_y <= 0 or self.ball_y >= self.HEIGHT - 1:
+            self.ball_vy *= -1
         if self.ball_x == 2:
-            if self.p1_y <= self.ball_y < self.p1_y + self.paddle_size: self.ball_vx *= -1
-            else: self.score2 += 1; self.reset_ball()
+            if self.p1_y <= self.ball_y < self.p1_y + self.paddle_size:
+                self.ball_vx *= -1
+            else:
+                self.score2 += 1
+                self.reset_ball()
         elif self.ball_x == self.WIDTH - 3:
-            if self.p2_y <= self.ball_y < self.p2_y + self.paddle_size: self.ball_vx *= -1
-            else: self.score1 += 1; self.reset_ball()
+            if self.p2_y <= self.ball_y < self.p2_y + self.paddle_size:
+                self.ball_vx *= -1
+            else:
+                self.score1 += 1
+                self.reset_ball()
 
     def process_input(self):
         ch = getch()
-        if ch == "q": self.game_over = True
-        if ch == self.controls_p1_up and self.p1_y > 0: self.p1_y -= 1
-        elif ch == self.controls_p1_down and self.p1_y < self.HEIGHT - self.paddle_size: self.p1_y += 1
+        if ch == "q":
+            self.game_over = True
+        if ch == self.controls_p1_up and self.p1_y > 0:
+            self.p1_y -= 1
+        elif ch == self.controls_p1_down and self.p1_y < self.HEIGHT - self.paddle_size:
+            self.p1_y += 1
         if self.mode == "local":
-            if ch == self.controls_p2_up and self.p2_y > 0: self.p2_y -= 1
-            elif ch == self.controls_p2_down and self.p2_y < self.HEIGHT - self.paddle_size: self.p2_y += 1
+            if ch == self.controls_p2_up and self.p2_y > 0:
+                self.p2_y -= 1
+            elif ch == self.controls_p2_down and self.p2_y < self.HEIGHT - self.paddle_size:
+                self.p2_y += 1
 
     def ai_move(self):
-        if self.ball_y < self.p2_y: self.p2_y -= 1
-        elif self.ball_y > self.p2_y + self.paddle_size - 1: self.p2_y += 1
+        if self.ball_y < self.p2_y:
+            self.p2_y -= 1
+        elif self.ball_y > self.p2_y + self.paddle_size - 1:
+            self.p2_y += 1
 
     def update_online(self):
         try:
@@ -150,7 +206,8 @@ class PongGame:
                 self.p1_y, self.ball_x, self.ball_y = int(data[0]), int(data[1]), int(data[2])
                 self.ball_vx, self.ball_vy = int(data[3]), int(data[4])
                 self.score1, self.score2 = int(data[5]), int(data[6])
-        except: self.game_over = True
+        except:
+            self.game_over = True
 
     def run(self):
         while not self.game_over:
@@ -159,7 +216,8 @@ class PongGame:
             if self.mode == "single": self.ai_move()
             self.move_ball()
             if self.mode.startswith("online"): self.update_online()
-            if self.score1 >= self.win_score or self.score2 >= self.win_score: self.game_over = True
+            if self.score1 >= self.win_score or self.score2 >= self.win_score:
+                self.game_over = True
             time.sleep(0.03)
         clear()
         print(GREEN + "Game Over" + RESET)
