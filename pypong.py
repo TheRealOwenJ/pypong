@@ -1,13 +1,4 @@
-import socket
-import threading
-import time
-import sys
-import os
-import random
-import select
-import termios
-import tty
-import json
+import socket, threading, time, sys, os, random, select, termios, tty, json
 
 RESET = "\033[0m"
 RED = "\033[31m"
@@ -18,7 +9,6 @@ MAGENTA = "\033[35m"
 WHITE = "\033[37m"
 
 DATA_FILE = "pong_userdata.json"
-
 default_data = {
     "username": "Player",
     "stats": {
@@ -28,21 +18,22 @@ default_data = {
     }
 }
 
-def clear():
-    os.system("clear" if os.name == "posix" else "cls")
+def clear(): os.system("clear" if os.name == "posix" else "cls")
 
-def getch(timeout=0.1):
+def getch(timeout=0.05):
     fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
+    old = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        rlist, _, _ = select.select([fd], [], [], timeout)
-        if rlist:
+        r, _, _ = select.select([fd], [], [], timeout)
+        if r:
             ch = sys.stdin.read(1)
+            if ch == '\x1b':
+                ch += sys.stdin.read(2)  # voor pijltjestoetsen
         else:
             ch = None
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
     return ch
 
 class UserData:
@@ -52,137 +43,69 @@ class UserData:
     def load(self):
         if os.path.exists(DATA_FILE):
             try:
-                with open(DATA_FILE, "r") as f:
+                with open(DATA_FILE) as f:
                     return json.load(f)
-            except:
-                return default_data.copy()
-        else:
-            return default_data.copy()
+            except: return default_data.copy()
+        return default_data.copy()
 
-    def save(self):
-        with open(DATA_FILE, "w") as f:
-            json.dump(self.data, f, indent=2)
-
-    def get_username(self):
-        return self.data.get("username", "Player")
-
-    def set_username(self, username):
-        username = username.strip()
-        if username:
-            self.data["username"] = username
-            self.save()
-            return True
+    def save(self): open(DATA_FILE, "w").write(json.dumps(self.data, indent=2))
+    def get_username(self): return self.data.get("username", "Player")
+    def set_username(self, name):
+        name = name.strip()
+        if name: self.data["username"] = name; self.save(); return True
         return False
 
     def record_result(self, mode, won):
-        key_map = {
-            "single": "vs_ai",
-            "local": "vs_local",
-            "online_host": "vs_online",
-            "online_client": "vs_online",
-        }
-        key = key_map.get(mode)
-        if not key:
-            return
-        if won:
-            self.data["stats"][key]["wins"] += 1
-        else:
-            self.data["stats"][key]["losses"] += 1
+        key = {"single": "vs_ai", "local": "vs_local", "online_host": "vs_online", "online_client": "vs_online"}.get(mode)
+        if not key: return
+        self.data["stats"][key]["wins" if won else "losses"] += 1
         self.save()
 
     def get_stats_str(self):
         s = self.data["stats"]
-        lines = []
-        lines.append(f"Username: {self.get_username()}")
-        lines.append("Stats:")
+        out = [f"Username: {self.get_username()}", "Stats:"]
         for k, v in s.items():
-            lines.append(f"  {k}: Wins: {v['wins']}  Losses: {v['losses']}")
-        return "\n".join(lines)
+            out.append(f"  {k}: Wins: {v['wins']}  Losses: {v['losses']}")
+        return "\n".join(out)
 
 class PongGame:
-    WIDTH = 60
-    HEIGHT = 20
-    PADDLE_HEIGHT = 4
-
-    def __init__(self, win_score, paddle_size, ball_speed, mode="single", online_client=None, online_server=None, user_data=None):
-        self.win_score = win_score
-        self.paddle_size = paddle_size
-        self.ball_speed = ball_speed
-        self.mode = mode
-        self.online_client = online_client
-        self.online_server = online_server
+    WIDTH, HEIGHT = 60, 20
+    def __init__(self, win_score, paddle_size, ball_speed, mode="single", user_data=None, online_server=None, online_client=None):
+        self.win_score, self.paddle_size, self.ball_speed, self.mode = win_score, paddle_size, ball_speed, mode
         self.user_data = user_data
+        self.username = user_data.get_username() if user_data else "Player"
+        self.opponent_username = "Opponent"
+        self.server = online_server
+        self.client = online_client
 
-        self.p1_y = (self.HEIGHT - self.paddle_size) // 2
-        self.p2_y = (self.HEIGHT - self.paddle_size) // 2
+        self.p1_y = self.p2_y = (self.HEIGHT - paddle_size) // 2
         self.ball_x = self.WIDTH // 2
         self.ball_y = self.HEIGHT // 2
-        self.ball_vx = 1
-        self.ball_vy = 1
-        self.score1 = 0
-        self.score2 = 0
+        self.ball_vx = random.choice([-1,1])
+        self.ball_vy = random.choice([-1,1])
+        self.score1 = self.score2 = 0
+        self.last_move = time.time()
         self.game_over = False
 
         self.controls_p1_up = "w"
         self.controls_p1_down = "s"
-        self.controls_p2_up = "o"
-        self.controls_p2_down = "l"
-        self.ai_difficulty = 2
-        self.last_ball_move = time.time()
+        self.controls_p2_up = "\x1b[A"
+        self.controls_p2_down = "\x1b[B"
 
     def draw(self):
         clear()
-        print(CYAN + f" Player 1: {self.score1} " + RESET + " " * 20 + CYAN + f" Player 2: {self.score2} " + RESET)
+        print(CYAN + f"{self.username}: {self.score1}" + RESET + " " * 15 + CYAN + f"{self.opponent_username}: {self.score2}" + RESET)
         print("-" * self.WIDTH)
         for y in range(self.HEIGHT):
             line = ""
             for x in range(self.WIDTH):
-                if x == 1 and self.p1_y <= y < self.p1_y + self.paddle_size:
-                    line += GREEN + "|" + RESET
-                elif x == self.WIDTH - 2 and self.p2_y <= y < self.p2_y + self.paddle_size:
-                    line += YELLOW + "|" + RESET
-                elif x == self.ball_x and y == self.ball_y:
-                    line += RED + "O" + RESET
-                elif y == 0 or y == self.HEIGHT - 1:
-                    line += "-"
-                else:
-                    line += " "
+                if x == 1 and self.p1_y <= y < self.p1_y + self.paddle_size: line += GREEN + "|" + RESET
+                elif x == self.WIDTH - 2 and self.p2_y <= y < self.p2_y + self.paddle_size: line += YELLOW + "|" + RESET
+                elif x == self.ball_x and y == self.ball_y: line += RED + "O" + RESET
+                else: line += " "
             print(line)
         print("-" * self.WIDTH)
-        mode_str = {
-            "single": "Singleplayer (W/S)",
-            "local": "Local Multiplayer (W/S + O/L)",
-            "online_host": "Online Multiplayer (Host)",
-            "online_client": "Online Multiplayer (Client)",
-        }.get(self.mode, "Unknown mode")
-        print(CYAN + f"Mode: {mode_str}" + RESET)
-        print("Press 'q' to quit game.")
-
-    def move_ball(self):
-        now = time.time()
-        if now - self.last_ball_move < self.ball_speed:
-            return
-        self.last_ball_move = now
-
-        self.ball_x += self.ball_vx
-        self.ball_y += self.ball_vy
-
-        if self.ball_y <= 1 or self.ball_y >= self.HEIGHT - 2:
-            self.ball_vy *= -1
-
-        if self.ball_x == 2:
-            if self.p1_y <= self.ball_y < self.p1_y + self.paddle_size:
-                self.ball_vx *= -1
-            else:
-                self.score2 += 1
-                self.reset_ball()
-
-        if self.ball_x == self.WIDTH - 3:
-            if self.p2_y <= self.ball_y < self.p2_y + self.paddle_size:
-                self.ball_vx *= -1
-            else:
-                self.score1 += 1
-                self.reset_ball()
+        print("Press 'q' to quit")
 
     def reset_ball(self):
         self.ball_x = self.WIDTH // 2
@@ -190,245 +113,102 @@ class PongGame:
         self.ball_vx = random.choice([-1, 1])
         self.ball_vy = random.choice([-1, 1])
 
-    def ai_move(self):
-        if self.ball_y < self.p2_y:
-            self.p2_y = max(1, self.p2_y - 1)
-        elif self.ball_y > self.p2_y + self.paddle_size - 1:
-            self.p2_y = min(self.HEIGHT - self.paddle_size - 1, self.p2_y + 1)
+    def move_ball(self):
+        if time.time() - self.last_move < self.ball_speed: return
+        self.last_move = time.time()
+        self.ball_x += self.ball_vx
+        self.ball_y += self.ball_vy
+        if self.ball_y <= 0 or self.ball_y >= self.HEIGHT - 1: self.ball_vy *= -1
+        if self.ball_x == 2:
+            if self.p1_y <= self.ball_y < self.p1_y + self.paddle_size: self.ball_vx *= -1
+            else: self.score2 += 1; self.reset_ball()
+        elif self.ball_x == self.WIDTH - 3:
+            if self.p2_y <= self.ball_y < self.p2_y + self.paddle_size: self.ball_vx *= -1
+            else: self.score1 += 1; self.reset_ball()
 
     def process_input(self):
-        ch = getch(0.05)
-        if not ch:
-            return None
-        ch = ch.lower()
-        if ch == "q":
-            self.game_over = True
-        if ch == self.controls_p1_up and self.p1_y > 1:
-            self.p1_y -= 1
-        elif ch == self.controls_p1_down and self.p1_y < self.HEIGHT - self.paddle_size - 1:
-            self.p1_y += 1
+        ch = getch()
+        if ch == "q": self.game_over = True
+        if ch == self.controls_p1_up and self.p1_y > 0: self.p1_y -= 1
+        elif ch == self.controls_p1_down and self.p1_y < self.HEIGHT - self.paddle_size: self.p1_y += 1
         if self.mode == "local":
-            if ch == self.controls_p2_up and self.p2_y > 1:
-                self.p2_y -= 1
-            elif ch == self.controls_p2_down and self.p2_y < self.HEIGHT - self.paddle_size - 1:
-                self.p2_y += 1
-        return ch
+            if ch == self.controls_p2_up and self.p2_y > 0: self.p2_y -= 1
+            elif ch == self.controls_p2_down and self.p2_y < self.HEIGHT - self.paddle_size: self.p2_y += 1
+
+    def ai_move(self):
+        if self.ball_y < self.p2_y: self.p2_y -= 1
+        elif self.ball_y > self.p2_y + self.paddle_size - 1: self.p2_y += 1
 
     def update_online(self):
-        if self.mode == "online_host" and self.online_server:
-            try:
-                data = f"{self.p1_y},{self.p2_y},{self.ball_x},{self.ball_y},{self.ball_vx},{self.ball_vy},{self.score1},{self.score2}\n"
-                self.online_server.sendall(data.encode())
-                self.online_server.settimeout(0.01)
-                try:
-                    recv_data = self.online_server.recv(16).decode().strip()
-                    if recv_data.isdigit():
-                        self.p2_y = int(recv_data)
-                except:
-                    pass
-            except:
-                self.game_over = True
-        elif self.mode == "online_client" and self.online_client:
-            try:
-                data = f"{self.p2_y}\n"
-                self.online_client.sendall(data.encode())
-                self.online_client.settimeout(0.01)
-                try:
-                    recv_data = self.online_client.recv(64).decode().strip()
-                    parts = recv_data.split(",")
-                    if len(parts) == 8:
-                        self.p1_y = int(parts[0])
-                        self.p2_y = int(parts[1])
-                        self.ball_x = int(parts[2])
-                        self.ball_y = int(parts[3])
-                        self.ball_vx = int(parts[4])
-                        self.ball_vy = int(parts[5])
-                        self.score1 = int(parts[6])
-                        self.score2 = int(parts[7])
-                except:
-                    pass
-            except:
-                self.game_over = True
+        try:
+            if self.mode == "online_host":
+                self.server.sendall(f"{self.p1_y},{self.ball_x},{self.ball_y},{self.ball_vx},{self.ball_vy},{self.score1},{self.score2}\n".encode())
+                self.p2_y = int(self.server.recv(32).decode().strip())
+            elif self.mode == "online_client":
+                self.client.sendall(f"{self.p2_y}\n".encode())
+                data = self.client.recv(64).decode().strip().split(",")
+                self.p1_y, self.ball_x, self.ball_y = int(data[0]), int(data[1]), int(data[2])
+                self.ball_vx, self.ball_vy = int(data[3]), int(data[4])
+                self.score1, self.score2 = int(data[5]), int(data[6])
+        except: self.game_over = True
 
     def run(self):
-        winner = None
         while not self.game_over:
             self.draw()
-            if self.mode == "single":
-                self.ai_move()
-                self.move_ball()
-                self.process_input()
-            elif self.mode == "local":
-                self.process_input()
-                self.move_ball()
-            elif self.mode in ("online_host", "online_client"):
-                self.process_input()
-                self.move_ball()
-                self.update_online()
-
-            if self.score1 >= self.win_score:
-                self.game_over = True
-                winner = "Player 1"
-            elif self.score2 >= self.win_score:
-                self.game_over = True
-                winner = "Player 2"
-
-            time.sleep(0.02)
-
+            self.process_input()
+            if self.mode == "single": self.ai_move()
+            self.move_ball()
+            if self.mode.startswith("online"): self.update_online()
+            if self.score1 >= self.win_score or self.score2 >= self.win_score: self.game_over = True
+            time.sleep(0.03)
         clear()
-        if winner:
-            print(GREEN + f"Game over! Winner: {winner}" + RESET)
-            if self.user_data:
-                if (winner == "Player 1" and self.mode == "single") or (winner == "Player 1" and self.mode == "local") or (winner == "Player 1" and self.mode in ("online_host", "online_client")):
-                    self.user_data.record_result(self.mode, True)
-                else:
-                    self.user_data.record_result(self.mode, False)
-        else:
-            print(YELLOW + "Game over. No winner (game quit early)." + RESET)
-        print("Press Enter to return to menu...")
-        input()
+        print(GREEN + "Game Over" + RESET)
+        input("Press Enter...")
 
-class Settings:
-    def __init__(self):
-        self.win_score = 5
-        self.paddle_size = 4
-        self.ball_speed = 0.1
-
-    def menu(self):
-        while True:
-            clear()
-            print(CYAN + "Settings Menu" + RESET)
-            print(f"1. Win score (single/local): {self.win_score}")
-            print(f"2. Paddle size (single/local): {self.paddle_size}")
-            print(f"3. Ball speed (lower = faster): {self.ball_speed:.2f}")
-            print("4. Back to main menu")
-            choice = input("Choose option to change: ").strip()
-
-            if choice == "1":
-                val = input("Enter win score (3-10): ").strip()
-                if val.isdigit() and 3 <= int(val) <= 10:
-                    self.win_score = int(val)
-            elif choice == "2":
-                val = input("Enter paddle size (2-8): ").strip()
-                if val.isdigit() and 2 <= int(val) <= 8:
-                    self.paddle_size = int(val)
-            elif choice == "3":
-                val = input("Enter ball speed in seconds (0.02 - 0.5): ").strip()
-                try:
-                    fval = float(val)
-                    if 0.02 <= fval <= 0.5:
-                        self.ball_speed = fval
-                except:
-                    pass
-            elif choice == "4":
-                break
-
-def get_own_ip():
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except:
-        return "Unknown"
-
-def online_host_menu(settings, user_data):
-    clear()
-    host_ip = get_own_ip()
-    print(CYAN + "Hosting online game." + RESET)
-    print(f"Your IP address: {YELLOW}{host_ip}{RESET}")
-    print("Waiting for a player to connect...\n")
-
-    host = "0.0.0.0"
-    port = 12345
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind((host, port))
-    s.listen(1)
-    s.settimeout(60)
-    try:
-        conn, addr = s.accept()
-    except socket.timeout:
-        print(RED + "Timeout waiting for client." + RESET)
-        input("Press Enter to continue...")
-        return
-
-    print(GREEN + f"Player connected from {addr}" + RESET)
-    game = PongGame(win_score=settings.win_score, paddle_size=settings.paddle_size, ball_speed=settings.ball_speed,
-                    mode="online_host", online_server=conn, user_data=user_data)
-    game.run()
-    conn.close()
+def get_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("8.8.8.8", 80))
+    ip = s.getsockname()[0]
     s.close()
-
-def online_client_menu(settings, user_data):
-    clear()
-    host = input("Enter host IP to connect to: ").strip()
-    port = 12345
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        s.connect((host, port))
-    except Exception as e:
-        print(RED + f"Failed to connect: {e}" + RESET)
-        input("Press Enter to continue...")
-        return
-
-    print(GREEN + f"Connected to server {host}" + RESET)
-    game = PongGame(win_score=settings.win_score, paddle_size=settings.paddle_size, ball_speed=settings.ball_speed,
-                    mode="online_client", online_client=s, user_data=user_data)
-    game.run()
-    s.close()
+    return ip
 
 def main_menu():
-    settings = Settings()
-    user_data = UserData()
-
+    user = UserData()
+    settings = {"win_score": 5, "paddle_size": 4, "ball_speed": 0.08}
     while True:
         clear()
-        print(MAGENTA + "=== Pong by @theowenj ===" + RESET)
-        print("1. Play Singleplayer")
-        print("2. Play Local Multiplayer")
-        print("3. Play Online Multiplayer (Host)")
-        print("4. Play Online Multiplayer (Join)")
-        print("5. Settings")
-        print("6. Change Username")
-        print("7. Show Stats")
-        print("8. Quit")
-        choice = input("Choose option: ").strip()
-
-        if choice == "1":
-            game = PongGame(settings.win_score, settings.paddle_size, settings.ball_speed, mode="single", user_data=user_data)
+        print("1. Singleplayer\n2. Local Multiplayer\n3. Online Host\n4. Online Join\n5. Change Username\n6. Stats\n7. Quit")
+        opt = input("> ").strip()
+        if opt == "1":
+            game = PongGame(**settings, mode="single", user_data=user)
             game.run()
-        elif choice == "2":
-            game = PongGame(settings.win_score, settings.paddle_size, settings.ball_speed, mode="local", user_data=user_data)
+        elif opt == "2":
+            game = PongGame(**settings, mode="local", user_data=user)
             game.run()
-        elif choice == "3":
-            online_host_menu(settings, user_data)
-        elif choice == "4":
-            online_client_menu(settings, user_data)
-        elif choice == "5":
-            settings.menu()
-        elif choice == "6":
-            clear()
-            print(CYAN + f"Current username: {user_data.get_username()}" + RESET)
-            new_name = input("Enter new username: ").strip()
-            if user_data.set_username(new_name):
-                print(GREEN + "Username updated!" + RESET)
-            else:
-                print(RED + "Invalid username." + RESET)
-            time.sleep(1.5)
-        elif choice == "7":
-            clear()
-            print(CYAN + "Player Stats" + RESET)
-            print(user_data.get_stats_str())
-            print("\nPress Enter to return to menu...")
-            input()
-        elif choice == "8":
-            clear()
-            print("Bye!")
+        elif opt == "3":
+            print(f"Your IP: {get_ip()}")
+            s = socket.socket(); s.bind(("", 12345)); s.listen(1)
+            conn, _ = s.accept()
+            opponent_name = conn.recv(32).decode().strip()
+            conn.sendall((user.get_username() + "\n").encode())
+            game = PongGame(**settings, mode="online_host", user_data=user, online_server=conn)
+            game.opponent_username = opponent_name
+            game.run(); conn.close()
+        elif opt == "4":
+            host = input("Host IP: ")
+            conn = socket.socket(); conn.connect((host, 12345))
+            conn.sendall((user.get_username() + "\n").encode())
+            opponent_name = conn.recv(32).decode().strip()
+            game = PongGame(**settings, mode="online_client", user_data=user, online_client=conn)
+            game.opponent_username = opponent_name
+            game.run(); conn.close()
+        elif opt == "5":
+            newname = input("New Username: ")
+            user.set_username(newname)
+        elif opt == "6":
+            clear(); print(user.get_stats_str()); input("Enter to return")
+        elif opt == "7":
             break
-        else:
-            print(RED + "Invalid option." + RESET)
-            time.sleep(1)
 
 if __name__ == "__main__":
     main_menu()
