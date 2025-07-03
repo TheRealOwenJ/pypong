@@ -6,38 +6,7 @@ import os
 import random
 import json
 import shutil
-import getch
-
-# --- Cross-platform getch() ---
-if os.name == 'nt':
-    import msvcrt
-    def getch(timeout=0.05):
-        start = time.time()
-        while True:
-            if msvcrt.kbhit():
-                ch = msvcrt.getch()
-                if ch == b'\xe0':  # pijltjestoetsen
-                    ch += msvcrt.getch()
-                return ch.decode(errors="ignore")
-            if time.time() - start > timeout:
-                return None
-else:
-    import tty, termios, select
-    def getch(timeout=0.05):
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd)
-            r, _, _ = select.select([fd], [], [], timeout)
-            if r:
-                ch = sys.stdin.read(1)
-                if ch == '\x1b':  # escape sequences voor pijltjes
-                    ch += sys.stdin.read(2)
-            else:
-                ch = None
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        return ch
+import getch  # Externe module, gebruik getch.getch()
 
 # --- Kleuren fallback ---
 try:
@@ -214,7 +183,7 @@ class PongGame:
                 self.reset_ball()
 
     def process_input(self):
-        ch = getch()
+        ch = getch.getch()  # Hier extern getch gebruiken
         if ch == "q":
             self.game_over = True
         if ch == self.controls_p1_up and self.p1_y > 0:
