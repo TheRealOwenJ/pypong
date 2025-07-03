@@ -284,6 +284,8 @@ def main_menu():
 
     while True:
         clear()
+        print("====== pypong ======")
+        print("    By @theowenj")
         print("1. Singleplayer")
         print("2. Local Multiplayer")
         print("3. Online Host")
