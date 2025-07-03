@@ -6,6 +6,7 @@ import os
 import random
 import json
 import shutil
+import getch
 
 # --- Cross-platform getch() ---
 if os.name == 'nt':
