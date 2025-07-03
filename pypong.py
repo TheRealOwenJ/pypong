@@ -7,7 +7,56 @@ import random
 import json
 import shutil
 
-# Cross-platform getch blijft hetzelfde (niet hier weergegeven ivm lengte)
+# --- Cross-platform getch() ---
+if os.name == 'nt':
+    import msvcrt
+    def getch(timeout=0.05):
+        start = time.time()
+        while True:
+            if msvcrt.kbhit():
+                ch = msvcrt.getch()
+                if ch == b'\xe0':  # pijltjestoetsen
+                    ch += msvcrt.getch()
+                return ch.decode(errors="ignore")
+            if time.time() - start > timeout:
+                return None
+else:
+    import tty, termios, select
+    def getch(timeout=0.05):
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            r, _, _ = select.select([fd], [], [], timeout)
+            if r:
+                ch = sys.stdin.read(1)
+                if ch == '\x1b':  # escape sequences voor pijltjes
+                    ch += sys.stdin.read(2)
+            else:
+                ch = None
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        return ch
+
+# --- Kleuren fallback ---
+try:
+    from colorama import init, Fore, Style
+    init(autoreset=True)
+    RESET = Style.RESET_ALL
+    RED = Fore.RED
+    GREEN = Fore.GREEN
+    YELLOW = Fore.YELLOW
+    CYAN = Fore.CYAN
+    MAGENTA = Fore.MAGENTA
+    WHITE = Fore.WHITE
+except ImportError:
+    RESET = "\033[0m"
+    RED = "\033[31m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    CYAN = "\033[36m"
+    MAGENTA = "\033[35m"
+    WHITE = "\033[37m"
 
 DATA_FILE = "pong_userdata.json"
 default_data = {
@@ -68,7 +117,6 @@ class UserData:
 
 
 class PongGame:
-    # Standaard vaste waarden, NIET aanpasbaar door gebruiker
     WIN_SCORE = 5
     PADDLE_SIZE = 4
     BALL_SPEED = 0.08
@@ -83,7 +131,6 @@ class PongGame:
         self.server = online_server
         self.client = online_client
 
-        # Terminal size fitten (indien ingeschakeld)
         if fit_terminal:
             size = shutil.get_terminal_size()
             self.WIDTH = max(30, size.columns - 10)
@@ -113,22 +160,21 @@ class PongGame:
 
     def draw(self):
         clear()
-        # Toon ook opponent wins in multiplayer
-        score_line = (f"{self.username}: {self.score1}  |  "
-                      f"{self.opponent_username}: {self.score2} (Wins: {self.opponent_wins})" 
+        score_line = (f"{CYAN}{self.username}: {self.score1}{RESET}  |  "
+                      f"{YELLOW}{self.opponent_username}: {self.score2} (Wins: {self.opponent_wins}){RESET}" 
                       if self.mode.startswith("online") else
-                      f"{self.username}: {self.score1}  |  {self.opponent_username}: {self.score2}")
+                      f"{CYAN}{self.username}: {self.score1}{RESET}  |  {YELLOW}{self.opponent_username}: {self.score2}{RESET}")
         print(score_line)
         print("-" * self.WIDTH)
         for y in range(self.HEIGHT):
             line = ""
             for x in range(self.WIDTH):
                 if x == 1 and self.p1_y <= y < self.p1_y + self.paddle_size:
-                    line += "|"
+                    line += GREEN + "|" + RESET
                 elif x == self.WIDTH - 2 and self.p2_y <= y < self.p2_y + self.paddle_size:
-                    line += "|"
+                    line += YELLOW + "|" + RESET
                 elif x == self.ball_x and y == self.ball_y:
-                    line += "O"
+                    line += RED + "O" + RESET
                 else:
                     line += " "
             print(line)
@@ -149,11 +195,9 @@ class PongGame:
         self.ball_x += self.ball_vx
         self.ball_y += self.ball_vy
 
-        # Boven en onder botsen
         if self.ball_y <= 0 or self.ball_y >= self.HEIGHT - 1:
             self.ball_vy *= -1
 
-        # Links paddle
         if self.ball_x == 2:
             if self.p1_y <= self.ball_y < self.p1_y + self.paddle_size:
                 self.ball_vx *= -1
@@ -161,7 +205,6 @@ class PongGame:
                 self.score2 += 1
                 self.reset_ball()
 
-        # Rechts paddle
         elif self.ball_x == self.WIDTH - 3:
             if self.p2_y <= self.ball_y < self.p2_y + self.paddle_size:
                 self.ball_vx *= -1
@@ -192,30 +235,24 @@ class PongGame:
     def update_online(self):
         try:
             if self.mode == "online_host":
-                # Verstuur eigen paddle positie, bal info, scores en username wins (optioneel)
-                data = f"{self.p1_y},{self.ball_x},{self.ball_y},{self.ball_vx},{self.ball_vy},{self.score1},{self.score2},{self.user_data.data['stats']['vs_online']['wins']}\n"
-                self.server.sendall(data.encode())
+                data_out = f"{self.p1_y},{self.ball_x},{self.ball_y},{self.ball_vx},{self.ball_vy},{self.score1},{self.score2},{self.user_data.data['stats']['vs_online']['wins']}\n"
+                self.server.sendall(data_out.encode())
 
-                # Ontvang client paddle positie en client wins en username
                 data_in = self.server.recv(64).decode().strip().split(",")
                 self.p2_y = int(data_in[0])
                 self.opponent_wins = int(data_in[7]) if len(data_in) > 7 else 0
 
             elif self.mode == "online_client":
-                # Stuur eigen paddle positie en wins
                 data_out = f"{self.p2_y},{self.user_data.data['stats']['vs_online']['wins']}\n"
                 self.client.sendall(data_out.encode())
 
-                # Ontvang server paddle positie, bal info, scores en wins
                 data_in = self.client.recv(64).decode().strip().split(",")
                 self.p1_y, self.ball_x, self.ball_y = int(data_in[0]), int(data_in[1]), int(data_in[2])
                 self.ball_vx, self.ball_vy = int(data_in[3]), int(data_in[4])
                 self.score1, self.score2 = int(data_in[5]), int(data_in[6])
                 self.opponent_wins = int(data_in[7]) if len(data_in) > 7 else 0
 
-        except Exception as e:
-            # Print eventueel de error voor debug
-            # print("Online connection error:", e)
+        except Exception:
             self.game_over = True
 
     def run(self):
@@ -234,8 +271,7 @@ class PongGame:
             time.sleep(0.03)
 
         clear()
-        print("Game Over")
-        # Resultaat opslaan
+        print(GREEN + "Game Over" + RESET)
         if self.user_data:
             won = self.score1 > self.score2
             self.user_data.record_result(self.mode, won)
@@ -248,9 +284,30 @@ def get_ip():
     s.close()
     return ip
 
+def settings_menu(settings, user):
+    clear()
+    print("Settings:")
+    print("1. Toggle Fit to Terminal (currently: {})".format("On" if settings["fit_terminal"] else "Off"))
+    print("2. Change Username (max 12 chars)")
+    print("3. Back")
+    choice = input("Choose: ").strip()
+    if choice == "1":
+        settings["fit_terminal"] = not settings["fit_terminal"]
+        print("Fit to terminal is now", "On" if settings["fit_terminal"] else "Off")
+        time.sleep(1)
+    elif choice == "2":
+        newname = input("New Username: ").strip()
+        if not user.set_username(newname):
+            print("Invalid username (empty or longer than 12 chars).")
+            time.sleep(1.5)
+    elif choice == "3":
+        pass
+    else:
+        print("Invalid option.")
+        time.sleep(1)
+
 def main_menu():
     user = UserData()
-    # Standaard instellingen: geen ball speed of paddle size aanpasbaar meer!
     settings = {
         "fit_terminal": False
     }
@@ -261,10 +318,9 @@ def main_menu():
         print("2. Local Multiplayer")
         print("3. Online Host")
         print("4. Online Join")
-        print("5. Change Username (max 12 chars)")
-        print("6. Toggle Fit to Terminal (currently {})".format("On" if settings["fit_terminal"] else "Off"))
-        print("7. Stats")
-        print("8. Quit")
+        print("5. Settings")
+        print("6. Stats")
+        print("7. Quit")
         opt = input("> ").strip()
 
         if opt == "1":
@@ -298,22 +354,15 @@ def main_menu():
             game.run()
             conn.close()
         elif opt == "5":
-            newname = input("New Username (max 12 chars): ").strip()
-            if not user.set_username(newname):
-                print("Invalid username (empty or longer than 12 chars).")
-                time.sleep(1.5)
+            settings_menu(settings, user)
         elif opt == "6":
-            settings["fit_terminal"] = not settings["fit_terminal"]
-            print("Fit to terminal is now", "On" if settings["fit_terminal"] else "Off")
-            time.sleep(1)
-        elif opt == "7":
             clear()
             print(user.get_stats_str())
             input("Press Enter to return...")
-        elif opt == "8":
+        elif opt == "7":
             break
         else:
-            print("Invalid option")
+            print("Invalid option.")
             time.sleep(1)
 
 if __name__ == "__main__":
