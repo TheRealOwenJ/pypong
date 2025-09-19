@@ -1,4 +1,3 @@
 # pypong
-an python-based terminal pong with multiplayer, usernames, stats, and BUGS. HELLA LOT OF BUGS.
-disclaimer btw dont get too excited the online mp is local networks only
+an python-based terminal pong with usernames, stats, and BUGS. HELLA LOT OF BUGS.
 YOU NEED TO RUN pip install getch TO MAKE IT WORK!!!
